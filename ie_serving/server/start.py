@@ -14,19 +14,23 @@
 # limitations under the License.
 #
 
-from concurrent import futures
-import time
-import grpc
 import sys
-import tensorflow.contrib.util as tf_contrib_util
-from tensorflow.core.framework import types_pb2
-from cheroot.wsgi import Server as WSGIServer, PathInfoDispatcher
+import time
+from concurrent import futures
+
+import grpc
 import numpy as np
-from ie_serving.tensorflow_serving_api import prediction_service_pb2
-from ie_serving.server.service import PredictionServiceServicer
+import tensorflow.contrib.util as tf_contrib_util
+from cheroot.wsgi import Server as WSGIServer, PathInfoDispatcher
+from tensorflow.core.framework import types_pb2
+from tensorflow_serving.apis import model_service_pb2_grpc
+from tensorflow_serving.apis import prediction_service_pb2_grpc
+
+from ie_serving.config import GLOBAL_CONFIG
 from ie_serving.logger import get_logger
-from ie_serving.config import FILE_SYSTEM_POLL_WAIT_SECONDS
 from ie_serving.server.rest_service import create_rest_api
+from ie_serving.server.service import PredictionServiceServicer, \
+    ModelServiceServicer
 
 logger = get_logger(__name__)
 
@@ -47,28 +51,37 @@ def serve(models, max_workers: int=1, port: int=9000):
                          options=[('grpc.max_send_message_length', GIGABYTE),
                                   ('grpc.max_receive_message_length', GIGABYTE)
                                   ])
-    prediction_service_pb2.add_PredictionServiceServicer_to_server(
+    prediction_service_pb2_grpc.add_PredictionServiceServicer_to_server(
         PredictionServiceServicer(models=models), server)
+    model_service_pb2_grpc.add_ModelServiceServicer_to_server(
+        ModelServiceServicer(models=models), server)
     server.add_insecure_port('[::]:{}'.format(port))
     server.start()
-    logger.info("Server listens on port {port} and will be "
+    logger.info("gRPC server listens on port {port} and will be "
                 "serving models: {models}".format(port=port,
                                                   models=list(models.keys())))
     try:
         while True:
-            time.sleep(FILE_SYSTEM_POLL_WAIT_SECONDS)
-            for model in models:
-                models[model].update()
+            if GLOBAL_CONFIG['file_system_poll_wait_seconds'] > 0:
+                time.sleep(GLOBAL_CONFIG['file_system_poll_wait_seconds'])
+                for model in models:
+                    models[model].update()
+            else:
+                time.sleep(_ONE_DAY_IN_SECONDS)
     except KeyboardInterrupt:
         server.stop(0)
         sys.exit(0)
 
 
-def start_web_rest_server(models, rest_port):
+def start_web_rest_server(models, rest_port, num_threads):
     d = PathInfoDispatcher({'/': create_rest_api(models)})
     server = WSGIServer(('0.0.0.0', rest_port), d,
-                        numthreads=1, request_queue_size=50)
-
+                        numthreads=num_threads,
+                        request_queue_size=GLOBAL_CONFIG[
+                            'rest_requests_queue_size'])
+    logger.info("REST server listens on port {port} and will be "
+                "serving models: {models}".format(port=rest_port,
+                                                  models=list(models.keys())))
     try:
         server.start()
     except KeyboardInterrupt:

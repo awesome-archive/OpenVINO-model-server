@@ -13,17 +13,19 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
-import boto3
-from botocore.client import Config
-from botocore import UNSIGNED
-from botocore import exceptions
-from ie_serving.config import MAPPING_CONFIG_FILENAME, S3_Config
-from ie_serving.logger import get_logger
-from ie_serving.models.ir_engine import IrEngine
-from ie_serving.models.model import Model
 import os
 import re
 from urllib.parse import urlparse, urlunparse
+
+import boto3
+from botocore import UNSIGNED
+from botocore import exceptions
+from botocore.client import Config
+
+from ie_serving.config import GLOBAL_CONFIG, S3_CONFIG
+from ie_serving.logger import get_logger
+from ie_serving.models.ir_engine import IrEngine
+from ie_serving.models.model import Model
 
 logger = get_logger(__name__)
 
@@ -32,11 +34,11 @@ class S3Model(Model):
     @classmethod
     def s3_list_content(cls, path):
         s3_resource = boto3.resource(
-            's3', endpoint_url=S3_Config.S3_ENDPOINT,
-            aws_access_key_id=S3_Config.S3_ACCESS_KEY_ID,
-            aws_secret_access_key=S3_Config.S3_SECRET_ACCESS_KEY,
-            config=Config(signature_version=S3_Config.S3_SIGNATURE),
-            region_name=S3_Config.S3_REGION)
+            's3', endpoint_url=S3_CONFIG['endpoint'],
+            aws_access_key_id=S3_CONFIG['access_key_id'],
+            aws_secret_access_key=S3_CONFIG['secret_access_key'],
+            config=Config(signature_version=S3_CONFIG['signature']),
+            region_name=S3_CONFIG['region'])
         parsed_path = urlparse(path)
         my_bucket = s3_resource.Bucket(parsed_path.netloc)
         content_list = []
@@ -54,20 +56,20 @@ class S3Model(Model):
         tmp_path = os.path.join('/tmp', file_path.split(os.sep)[-1])
         try:
             s3_client = boto3.client(
-                's3', endpoint_url=S3_Config.S3_ENDPOINT,
-                aws_access_key_id=S3_Config.S3_ACCESS_KEY_ID,
-                aws_secret_access_key=S3_Config.S3_SECRET_ACCESS_KEY,
-                config=Config(signature_version=S3_Config.S3_SIGNATURE),
-                region_name=S3_Config.S3_REGION)
+                's3', endpoint_url=S3_CONFIG['endpoint'],
+                aws_access_key_id=S3_CONFIG['access_key_id'],
+                aws_secret_access_key=S3_CONFIG['secret_access_key'],
+                config=Config(signature_version=S3_CONFIG['signature']),
+                region_name=S3_CONFIG['region'])
             s3_transfer = boto3.s3.transfer.S3Transfer(s3_client)
             s3_transfer.download_file(bucket_name, file_path, tmp_path)
         except exceptions.ClientError:
             s3_client = boto3.client(
-                's3', endpoint_url=S3_Config.S3_ENDPOINT,
-                aws_access_key_id=S3_Config.S3_ACCESS_KEY_ID,
-                aws_secret_access_key=S3_Config.S3_SECRET_ACCESS_KEY,
+                's3', endpoint_url=S3_CONFIG['endpoint'],
+                aws_access_key_id=S3_CONFIG['access_key_id'],
+                aws_secret_access_key=S3_CONFIG['secret_access_key'],
                 config=Config(signature_version=UNSIGNED),
-                region_name=S3_Config.S3_REGION)
+                region_name=S3_CONFIG['region'])
             s3_transfer = boto3.s3.transfer.S3Transfer(s3_client)
             s3_transfer.download_file(bucket_name, file_path, tmp_path)
         return tmp_path
@@ -78,7 +80,7 @@ class S3Model(Model):
             model_directory += os.sep
         parsed_model_dir = urlparse(model_directory)
         content_list = cls.s3_list_content(model_directory)
-        pattern = re.compile('(' + parsed_model_dir.path[1:-1] + '/\d+/).*$')
+        pattern = re.compile('(' + parsed_model_dir.path[1:-1] + r'/\d+/).*$')
         versions = set([m.group(1) for m in (pattern.match(element) for
                                              element in content_list) if m])
 
@@ -115,23 +117,26 @@ class S3Model(Model):
     @classmethod
     def _get_mapping_config(cls, version):
         content_list = cls.s3_list_content(version)
-        mapping_config = urlparse(version).path[1:] + MAPPING_CONFIG_FILENAME
+        mapping_config = urlparse(version).path[1:] + GLOBAL_CONFIG[
+            'mapping_config_filename']
         if mapping_config in content_list:
-            return version + MAPPING_CONFIG_FILENAME
+            return version + GLOBAL_CONFIG['mapping_config_filename']
         else:
             return None
 
     @classmethod
-    def get_engine_for_version(cls, version_attributes):
-        local_xml_file, local_bin_file, local_mapping_config = \
-            cls.create_local_mirror(version_attributes)
+    def get_engine_for_version(cls, model_name, version_attributes):
+        version_attributes['xml_file'], version_attributes['bin_file'], \
+            version_attributes['mapping_config'] = cls.create_local_mirror(
+            version_attributes)
         logger.info('Downloaded files from S3')
-        engine = IrEngine.build(model_xml=local_xml_file,
-                                model_bin=local_bin_file,
-                                mapping_config=local_mapping_config,
-                                batch_size=version_attributes['batch_size'])
-        cls.delete_local_mirror([local_xml_file, local_bin_file,
-                                 local_mapping_config])
+
+        engine_spec = cls._get_engine_spec(model_name, version_attributes)
+        engine = IrEngine.build(**engine_spec)
+
+        cls.delete_local_mirror([version_attributes['xml_file'],
+                                 version_attributes['bin_file'],
+                                 version_attributes['mapping_config']])
         logger.info('Deleted temporary files')
         return engine
 

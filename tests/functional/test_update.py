@@ -13,110 +13,33 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
-import time
 import shutil
-from conftest import copy_model, get_model_metadata, model_metadata_response, \
-    get_model_metadata_response_rest # noqa
+import sys
+import time
+
+from constants import PREDICTION_SERVICE, MODEL_SERVICE
+from utils.grpc import get_model_metadata, model_metadata_response, \
+    get_model_status
+from utils.model_management import copy_model
+from utils.rest import get_model_metadata_response_rest, \
+    get_model_status_response_rest
+
+sys.path.append(".")
+from ie_serving.models.models_utils import ModelVersionState, ErrorCode, \
+    _ERROR_MESSAGE  # noqa
 
 
 class TestSingleModelInference():
 
-    def test_latest_version(self, download_two_model_versions, get_test_dir,
-                            start_server_update_flow_latest,
-                            create_channel_for_update_flow_latest):
-        resnet_v1, resnet_v2 = download_two_model_versions
-        dir = get_test_dir + '/saved_models/' + 'update/'
-        resnet_v1_copy_dir = copy_model(resnet_v1, 1, dir)
-        time.sleep(8)
-        stub = create_channel_for_update_flow_latest
-
-        print("Getting info about resnet model")
-        model_name = 'resnet'
-        out_name = 'resnet_v1_50/predictions/Reshape_1'
-        expected_input_metadata = {'input': {'dtype': 1,
-                                             'shape': [1, 3, 224, 224]}}
-        expected_output_metadata = {out_name: {'dtype': 1,
-                                               'shape': [1, 1000]}}
-        request = get_model_metadata(model_name=model_name)
-        response = stub.GetModelMetadata(request, 10)
-        input_metadata, output_metadata = model_metadata_response(
-            response=response)
-
-        print(output_metadata)
-        assert model_name == response.model_spec.name
-        assert expected_input_metadata == input_metadata
-        assert expected_output_metadata == output_metadata
-        shutil.rmtree(resnet_v1_copy_dir)
-        resnet_v2_copy_dir = copy_model(resnet_v2, 2, dir)
-        time.sleep(3)
-
-        out_name = 'resnet_v2_50/predictions/Reshape_1'
-        expected_input_metadata = {'input': {'dtype': 1,
-                                             'shape': [1, 3, 224, 224]}}
-        expected_output_metadata = {out_name: {'dtype': 1,
-                                               'shape': [1, 1001]}}
-        request = get_model_metadata(model_name=model_name)
-        response = stub.GetModelMetadata(request, 10)
-        input_metadata, output_metadata = model_metadata_response(
-            response=response)
-
-        print(output_metadata)
-        assert model_name == response.model_spec.name
-        assert expected_input_metadata == input_metadata
-        assert expected_output_metadata == output_metadata
-        shutil.rmtree(resnet_v2_copy_dir)
-
-    def test_latest_version_rest(self, download_two_model_versions,
-                                 get_test_dir,
-                                 start_server_update_flow_latest):
-        resnet_v1, resnet_v2 = download_two_model_versions
-        dir = get_test_dir + '/saved_models/' + 'update/'
-        resnet_v1_copy_dir = copy_model(resnet_v1, 1, dir)
-        time.sleep(8)
-
-        print("Getting info about resnet model")
-        model_name = 'resnet'
-        out_name = 'resnet_v1_50/predictions/Reshape_1'
-        expected_input_metadata = {'input': {'dtype': 1,
-                                             'shape': [1, 3, 224, 224]}}
-        expected_output_metadata = {out_name: {'dtype': 1,
-                                               'shape': [1, 1000]}}
-        rest_url = 'http://localhost:5562/v1/models/resnet/metadata'
-        response = get_model_metadata_response_rest(rest_url)
-        input_metadata, output_metadata = model_metadata_response(
-            response=response)
-
-        print(output_metadata)
-        assert model_name == response.model_spec.name
-        assert expected_input_metadata == input_metadata
-        assert expected_output_metadata == output_metadata
-        shutil.rmtree(resnet_v1_copy_dir)
-        resnet_v2_copy_dir = copy_model(resnet_v2, 2, dir)
-        time.sleep(3)
-
-        out_name = 'resnet_v2_50/predictions/Reshape_1'
-        expected_input_metadata = {'input': {'dtype': 1,
-                                             'shape': [1, 3, 224, 224]}}
-        expected_output_metadata = {out_name: {'dtype': 1,
-                                               'shape': [1, 1001]}}
-        response = get_model_metadata_response_rest(rest_url)
-        input_metadata, output_metadata = model_metadata_response(
-            response=response)
-
-        print(output_metadata)
-        assert model_name == response.model_spec.name
-        assert expected_input_metadata == input_metadata
-        assert expected_output_metadata == output_metadata
-        shutil.rmtree(resnet_v2_copy_dir)
-
     def test_specific_version(self, download_two_model_versions,
                               resnet_2_out_model_downloader, get_test_dir,
                               start_server_update_flow_specific,
-                              create_channel_for_update_flow_specific):
+                              create_grpc_channel):
         resnet_v1, resnet_v2 = download_two_model_versions
         resnet_2_out = resnet_2_out_model_downloader
         dir = get_test_dir + '/saved_models/' + 'update/'
-        stub = create_channel_for_update_flow_specific
+        stub = create_grpc_channel('localhost:9008', PREDICTION_SERVICE)
+        status_stub = create_grpc_channel('localhost:9008', MODEL_SERVICE)
         resnet_v1_copy_dir = copy_model(resnet_v1, 1, dir)
         resnet_2_out_copy_dir = copy_model(resnet_2_out, 4, dir)
         time.sleep(8)
@@ -156,9 +79,23 @@ class TestSingleModelInference():
         assert input_metadata_v4 == input_metadata_latest
         assert output_metadata_v4 == output_metadata_latest
 
+        # Model status check
+        model_name = 'resnet'
+        request = get_model_status(model_name=model_name)
+        status_response = status_stub.GetModelStatus(request, 10)
+        versions_statuses = status_response.model_version_status
+        assert len(versions_statuses) == 2
+        for version_status in versions_statuses:
+            assert version_status.version in [1, 4]
+            assert version_status.state == ModelVersionState.AVAILABLE
+            assert version_status.status.error_code == ErrorCode.OK
+            assert version_status.status.error_message == _ERROR_MESSAGE[
+                ModelVersionState.AVAILABLE][ErrorCode.OK]
+        ###
+
         shutil.rmtree(resnet_2_out_copy_dir)
         resnet_v2_copy_dir = copy_model(resnet_v2, 3, dir)
-        time.sleep(3)
+        time.sleep(10)
 
         # Available versions: 1, 3
 
@@ -178,17 +115,37 @@ class TestSingleModelInference():
         assert input_metadata_v3 == input_metadata_latest
         assert output_metadata_v3 == output_metadata_latest
 
+        # Model status check
+        model_name = 'resnet'
+        request = get_model_status(model_name=model_name)
+        status_response = status_stub.GetModelStatus(request, 10)
+        versions_statuses = status_response.model_version_status
+        assert len(versions_statuses) == 3
+        for version_status in versions_statuses:
+            assert version_status.version in [1, 3, 4]
+            if version_status.version == 4:
+                assert version_status.state == ModelVersionState.END
+                assert version_status.status.error_code == ErrorCode.OK
+                assert version_status.status.error_message == _ERROR_MESSAGE[
+                    ModelVersionState.END][ErrorCode.OK]
+            elif version_status.version == 1 or version_status.version == 3:
+                assert version_status.state == ModelVersionState.AVAILABLE
+                assert version_status.status.error_code == ErrorCode.OK
+                assert version_status.status.error_message == _ERROR_MESSAGE[
+                    ModelVersionState.AVAILABLE][ErrorCode.OK]
+        ###
+
         # Available versions: 1, 3, 4
 
         resnet_2_out_copy_dir = copy_model(resnet_2_out, 4, dir)
-        time.sleep(3)
+        time.sleep(10)
 
         request_v1 = get_model_metadata(model_name=model_name, version=1)
         response_v1 = stub.GetModelMetadata(request_v1, 10)
         input_metadata_v1, output_metadata_v1 = model_metadata_response(
             response=response_v1)
 
-        assert model_name == response.model_spec.name
+        assert model_name == response_v1.model_spec.name
         assert expected_input_metadata_v1 == input_metadata_v1
         assert expected_output_metadata_v1 == output_metadata_v1
 
@@ -203,7 +160,7 @@ class TestSingleModelInference():
         input_metadata_v3, output_metadata_v3 = model_metadata_response(
             response=response_v3)
 
-        assert model_name == response.model_spec.name
+        assert model_name == response_v3.model_spec.name
         assert expected_input_metadata_v3 == input_metadata_v3
         assert expected_output_metadata_v3 == output_metadata_v3
 
@@ -221,9 +178,106 @@ class TestSingleModelInference():
         assert expected_input_metadata_v4 == input_metadata_v4
         assert expected_output_metadata_v4 == output_metadata_v4
 
+        # Model status check
+        model_name = 'resnet'
+        request = get_model_status(model_name=model_name)
+        status_response = status_stub.GetModelStatus(request, 10)
+        versions_statuses = status_response.model_version_status
+        assert len(versions_statuses) == 3
+        for version_status in versions_statuses:
+            assert version_status.version in [1, 3, 4]
+            assert version_status.state == ModelVersionState.AVAILABLE
+            assert version_status.status.error_code == ErrorCode.OK
+            assert version_status.status.error_message == _ERROR_MESSAGE[
+                ModelVersionState.AVAILABLE][ErrorCode.OK]
+        ###
+
         shutil.rmtree(resnet_v2_copy_dir)
         shutil.rmtree(resnet_v1_copy_dir)
         shutil.rmtree(resnet_2_out_copy_dir)
+        time.sleep(10)
+
+    def test_latest_version(self, download_two_model_versions, get_test_dir,
+                            start_server_update_flow_latest,
+                            create_grpc_channel):
+        resnet_v1, resnet_v2 = download_two_model_versions
+        dir = get_test_dir + '/saved_models/' + 'update/'
+        resnet_v1_copy_dir = copy_model(resnet_v1, 1, dir)
+        time.sleep(8)
+        stub = create_grpc_channel('localhost:9007', PREDICTION_SERVICE)
+        status_stub = create_grpc_channel('localhost:9007', MODEL_SERVICE)
+
+        print("Getting info about resnet model")
+        model_name = 'resnet'
+        out_name = 'resnet_v1_50/predictions/Reshape_1'
+        expected_input_metadata = {'input': {'dtype': 1,
+                                             'shape': [1, 3, 224, 224]}}
+        expected_output_metadata = {out_name: {'dtype': 1,
+                                               'shape': [1, 1000]}}
+        request = get_model_metadata(model_name=model_name)
+        response = stub.GetModelMetadata(request, 10)
+        input_metadata, output_metadata = model_metadata_response(
+            response=response)
+
+        print(output_metadata)
+        assert model_name == response.model_spec.name
+        assert expected_input_metadata == input_metadata
+        assert expected_output_metadata == output_metadata
+
+        # Model status check before update
+        model_name = 'resnet'
+        request = get_model_status(model_name=model_name)
+        status_response = status_stub.GetModelStatus(request, 10)
+        versions_statuses = status_response.model_version_status
+        version_status = versions_statuses[0]
+        assert len(versions_statuses) == 1
+        assert version_status.version == 1
+        assert version_status.state == ModelVersionState.AVAILABLE
+        assert version_status.status.error_code == ErrorCode.OK
+        assert version_status.status.error_message == _ERROR_MESSAGE[
+            ModelVersionState.AVAILABLE][ErrorCode.OK]
+        ###
+
+        shutil.rmtree(resnet_v1_copy_dir)
+        resnet_v2_copy_dir = copy_model(resnet_v2, 2, dir)
+        time.sleep(10)
+
+        out_name = 'resnet_v2_50/predictions/Reshape_1'
+        expected_input_metadata = {'input': {'dtype': 1,
+                                             'shape': [1, 3, 224, 224]}}
+        expected_output_metadata = {out_name: {'dtype': 1,
+                                               'shape': [1, 1001]}}
+        request = get_model_metadata(model_name=model_name)
+        response = stub.GetModelMetadata(request, 10)
+        input_metadata, output_metadata = model_metadata_response(
+            response=response)
+
+        print(output_metadata)
+        assert model_name == response.model_spec.name
+        assert expected_input_metadata == input_metadata
+        assert expected_output_metadata == output_metadata
+
+        # Model status check after update
+        model_name = 'resnet'
+        request = get_model_status(model_name=model_name)
+        status_response = status_stub.GetModelStatus(request, 10)
+        versions_statuses = status_response.model_version_status
+        assert len(versions_statuses) == 2
+        for version_status in versions_statuses:
+            assert version_status.version in [1, 2]
+            if version_status.version == 1:
+                assert version_status.state == ModelVersionState.END
+                assert version_status.status.error_code == ErrorCode.OK
+                assert version_status.status.error_message == _ERROR_MESSAGE[
+                    ModelVersionState.END][ErrorCode.OK]
+            elif version_status.version == 2:
+                assert version_status.state == ModelVersionState.AVAILABLE
+                assert version_status.status.error_code == ErrorCode.OK
+                assert version_status.status.error_message == _ERROR_MESSAGE[
+                    ModelVersionState.AVAILABLE][ErrorCode.OK]
+        ###
+        shutil.rmtree(resnet_v2_copy_dir)
+        time.sleep(10)
 
     def test_specific_version_rest(self, download_two_model_versions,
                                    resnet_2_out_model_downloader,
@@ -273,9 +327,22 @@ class TestSingleModelInference():
         assert input_metadata_v4 == input_metadata_latest
         assert output_metadata_v4 == output_metadata_latest
 
+        # Model status check
+        rest_status_url = 'http://localhost:5563/v1/models/resnet'
+        status_response = get_model_status_response_rest(rest_status_url)
+        versions_statuses = status_response.model_version_status
+        assert len(versions_statuses) == 2
+        for version_status in versions_statuses:
+            assert version_status.version in [1, 4]
+            assert version_status.state == ModelVersionState.AVAILABLE
+            assert version_status.status.error_code == ErrorCode.OK
+            assert version_status.status.error_message == _ERROR_MESSAGE[
+                ModelVersionState.AVAILABLE][ErrorCode.OK]
+        ###
+
         shutil.rmtree(resnet_2_out_copy_dir)
         resnet_v2_copy_dir = copy_model(resnet_v2, 3, dir)
-        time.sleep(3)
+        time.sleep(10)
 
         # Available versions: 1, 3
 
@@ -296,10 +363,29 @@ class TestSingleModelInference():
         assert input_metadata_v3 == input_metadata_latest
         assert output_metadata_v3 == output_metadata_latest
 
+        # Model status check
+        rest_status_url = 'http://localhost:5563/v1/models/resnet'
+        status_response = get_model_status_response_rest(rest_status_url)
+        versions_statuses = status_response.model_version_status
+        assert len(versions_statuses) == 3
+        for version_status in versions_statuses:
+            assert version_status.version in [1, 3, 4]
+            if version_status.version == 4:
+                assert version_status.state == ModelVersionState.END
+                assert version_status.status.error_code == ErrorCode.OK
+                assert version_status.status.error_message == _ERROR_MESSAGE[
+                    ModelVersionState.END][ErrorCode.OK]
+            elif version_status.version == 1 or version_status.version == 3:
+                assert version_status.state == ModelVersionState.AVAILABLE
+                assert version_status.status.error_code == ErrorCode.OK
+                assert version_status.status.error_message == _ERROR_MESSAGE[
+                    ModelVersionState.AVAILABLE][ErrorCode.OK]
+        ###
+
         # Available versions: 1, 3, 4
 
         resnet_2_out_copy_dir = copy_model(resnet_2_out, 4, dir)
-        time.sleep(3)
+        time.sleep(10)
 
         rest_url_v1 = 'http://localhost:5563/v1/models/resnet/' \
                       'versions/1/metadata'
@@ -307,7 +393,7 @@ class TestSingleModelInference():
         input_metadata_v1, output_metadata_v1 = model_metadata_response(
             response=response_v1)
 
-        assert model_name == response.model_spec.name
+        assert model_name == response_v1.model_spec.name
         assert expected_input_metadata_v1 == input_metadata_v1
         assert expected_output_metadata_v1 == output_metadata_v1
 
@@ -323,7 +409,7 @@ class TestSingleModelInference():
         input_metadata_v3, output_metadata_v3 = model_metadata_response(
             response=response_v3)
 
-        assert model_name == response.model_spec.name
+        assert model_name == response_v3.model_spec.name
         assert expected_input_metadata_v3 == input_metadata_v3
         assert expected_output_metadata_v3 == output_metadata_v3
 
@@ -341,18 +427,109 @@ class TestSingleModelInference():
         assert expected_input_metadata_v4 == input_metadata_v4
         assert expected_output_metadata_v4 == output_metadata_v4
 
+        # Model status check
+        rest_status_url = 'http://localhost:5563/v1/models/resnet'
+        status_response = get_model_status_response_rest(rest_status_url)
+        versions_statuses = status_response.model_version_status
+        assert len(versions_statuses) == 3
+        for version_status in versions_statuses:
+            assert version_status.version in [1, 3, 4]
+            assert version_status.state == ModelVersionState.AVAILABLE
+            assert version_status.status.error_code == ErrorCode.OK
+            assert version_status.status.error_message == _ERROR_MESSAGE[
+                ModelVersionState.AVAILABLE][ErrorCode.OK]
+        ###
+
         shutil.rmtree(resnet_v2_copy_dir)
         shutil.rmtree(resnet_v1_copy_dir)
         shutil.rmtree(resnet_2_out_copy_dir)
+        time.sleep(10)
+
+    def test_latest_version_rest(self, download_two_model_versions,
+                                 get_test_dir,
+                                 start_server_update_flow_latest):
+        resnet_v1, resnet_v2 = download_two_model_versions
+        dir = get_test_dir + '/saved_models/' + 'update/'
+        resnet_v1_copy_dir = copy_model(resnet_v1, 1, dir)
+        time.sleep(8)
+
+        print("Getting info about resnet model")
+        model_name = 'resnet'
+        out_name = 'resnet_v1_50/predictions/Reshape_1'
+        expected_input_metadata = {'input': {'dtype': 1,
+                                             'shape': [1, 3, 224, 224]}}
+        expected_output_metadata = {out_name: {'dtype': 1,
+                                               'shape': [1, 1000]}}
+        rest_url = 'http://localhost:5562/v1/models/resnet/metadata'
+        response = get_model_metadata_response_rest(rest_url)
+        input_metadata, output_metadata = model_metadata_response(
+            response=response)
+
+        print(output_metadata)
+        assert model_name == response.model_spec.name
+        assert expected_input_metadata == input_metadata
+        assert expected_output_metadata == output_metadata
+
+        # Model status check before update
+        rest_status_url = 'http://localhost:5562/v1/models/resnet'
+        status_response = get_model_status_response_rest(rest_status_url)
+        versions_statuses = status_response.model_version_status
+        version_status = versions_statuses[0]
+        assert len(versions_statuses) == 1
+        assert version_status.version == 1
+        assert version_status.state == ModelVersionState.AVAILABLE
+        assert version_status.status.error_code == ErrorCode.OK
+        assert version_status.status.error_message == _ERROR_MESSAGE[
+            ModelVersionState.AVAILABLE][ErrorCode.OK]
+        ###
+
+        shutil.rmtree(resnet_v1_copy_dir)
+        resnet_v2_copy_dir = copy_model(resnet_v2, 2, dir)
+        time.sleep(10)
+
+        out_name = 'resnet_v2_50/predictions/Reshape_1'
+        expected_input_metadata = {'input': {'dtype': 1,
+                                             'shape': [1, 3, 224, 224]}}
+        expected_output_metadata = {out_name: {'dtype': 1,
+                                               'shape': [1, 1001]}}
+        response = get_model_metadata_response_rest(rest_url)
+        input_metadata, output_metadata = model_metadata_response(
+            response=response)
+
+        print(output_metadata)
+        assert model_name == response.model_spec.name
+        assert expected_input_metadata == input_metadata
+        assert expected_output_metadata == output_metadata
+
+        # Model status check after update
+        status_response = get_model_status_response_rest(rest_status_url)
+        versions_statuses = status_response.model_version_status
+        assert len(versions_statuses) == 2
+        for version_status in versions_statuses:
+            assert version_status.version in [1, 2]
+            if version_status.version == 1:
+                assert version_status.state == ModelVersionState.END
+                assert version_status.status.error_code == ErrorCode.OK
+                assert version_status.status.error_message == _ERROR_MESSAGE[
+                    ModelVersionState.END][ErrorCode.OK]
+            elif version_status.version == 2:
+                assert version_status.state == ModelVersionState.AVAILABLE
+                assert version_status.status.error_code == ErrorCode.OK
+                assert version_status.status.error_message == _ERROR_MESSAGE[
+                    ModelVersionState.AVAILABLE][ErrorCode.OK]
+        ###
+
+        shutil.rmtree(resnet_v2_copy_dir)
+        time.sleep(10)
 
     def test_update_rest_grpc(self, download_two_model_versions,
                               resnet_2_out_model_downloader, get_test_dir,
                               start_server_update_flow_specific,
-                              create_channel_for_update_flow_specific):
+                              create_grpc_channel):
         resnet_v1, resnet_v2 = download_two_model_versions
         resnet_2_out = resnet_2_out_model_downloader
         dir = get_test_dir + '/saved_models/' + 'update/'
-        stub = create_channel_for_update_flow_specific
+        stub = create_grpc_channel('localhost:9008', PREDICTION_SERVICE)
         resnet_v1_copy_dir = copy_model(resnet_v1, 1, dir)
         resnet_2_out_copy_dir = copy_model(resnet_2_out, 4, dir)
         time.sleep(8)

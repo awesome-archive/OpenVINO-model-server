@@ -15,7 +15,7 @@
 #
 import glob
 
-from ie_serving.config import MAPPING_CONFIG_FILENAME
+from ie_serving.config import GLOBAL_CONFIG
 from ie_serving.logger import get_logger
 from ie_serving.models.ir_engine import IrEngine
 from ie_serving.models.model import Model
@@ -45,16 +45,14 @@ class LocalModel(Model):
 
     @classmethod
     def _get_mapping_config(cls, version):
-        mapping_config = glob.glob(version + MAPPING_CONFIG_FILENAME)
+        mapping_config = glob.glob(version + GLOBAL_CONFIG[
+            'mapping_config_filename'])
         if len(mapping_config) == 1:
             return mapping_config[0]
         return None
 
     @classmethod
-    def get_engine_for_version(cls, version_attributes):
-        engine = IrEngine.build(model_bin=version_attributes['bin_file'],
-                                model_xml=version_attributes['xml_file'],
-                                mapping_config=version_attributes
-                                ['mapping_config'],
-                                batch_size=version_attributes['batch_size'])
+    def get_engine_for_version(cls, model_name, version_attributes):
+        engine_spec = cls._get_engine_spec(model_name, version_attributes)
+        engine = IrEngine.build(**engine_spec)
         return engine

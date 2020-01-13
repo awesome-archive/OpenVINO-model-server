@@ -8,24 +8,36 @@ ARG DL_DIR=/tmp
 ARG https_proxy
 
 ENV TEMP_DIR $TEMP_DIR
-
+ARG DLDT_PACKAGE_URL
 RUN apt-get update && apt-get install -y --no-install-recommends \
     cpio \
     python3-dev \
     python3-pip \
     python3-venv \
     usbutils \
-    virtualenv
+    virtualenv \
+    libboost-filesystem1.58.0 \
+    libboost-thread1.58.0 \
+    libjson-c2 \
+    wget
 
-ADD l_openvino_toolkit*.tgz $TEMP_DIR/
-RUN cd $TEMP_DIR/l_openvino_toolkit* && \
+RUN mkdir -p $TEMP_DIR && cd $TEMP_DIR/ && \
+    wget $DLDT_PACKAGE_URL && \
+    tar -zxf l_openvino_toolkit*.tgz && \
+    cd l_openvino_toolkit* && \
     sed -i 's/decline/accept/g' silent.cfg && \
     case $(pwd) in \
-        *openvino_toolkit_p_2019*) \
+        *openvino_toolkit_p_2019.2) \
             COMPONENTS='intel-openvino-base__noarch;intel-openvino-dldt-base__noarch;intel-openvino-setupvars__x86_64;intel-openvino-ie-sdk-ubuntu-xenial__x86_64;intel-openvino-ie-rt__x86_64;intel-openvino-ie-rt-core-ubuntu-xenial__x86_64;intel-openvino-ie-rt-cpu-ubuntu-xenial__x86_64;intel-openvino-ie-rt-vpu-ubuntu-xenial__x86_64;intel-openvino-ie-rt-hddl-ubuntu-xenial__x86_64;intel-openvino-gfx-driver__x86_64;intel-openvino-base-pset' \
             ;; \
-        *openvino_toolkit_fpga_2019*) \
+        *openvino_toolkit_fpga_2019.2) \
             COMPONENTS='intel-openvino-full__noarch;intel-openvino-dldt-full__noarch;intel-openvino-setupvars__x86_64;intel-openvino-ie-sdk-ubuntu-xenial__x86_64;intel-openvino-ie-rt__x86_64;intel-openvino-ie-rt-core-ubuntu-xenial__x86_64;intel-openvino-ie-rt-cpu-ubuntu-xenial__x86_64;intel-openvino-ie-rt-vpu-ubuntu-xenial__x86_64;intel-openvino-ie-rt-hddl-ubuntu-xenial__x86_64;intel-openvino-gfx-driver__x86_64;intel-openvino-full-pset' \
+            ;; \
+        *openvino_toolkit_p_2019.3*) \
+            COMPONENTS='intel-openvino-base__noarch;intel-openvino-dldt-base__noarch;intel-openvino-setupvars__noarch;intel-openvino-eula__noarch;intel-openvino-ie-sdk-ubuntu-xenial__x86_64;intel-openvino-ie-bin-python-tools-ubuntu-xenial__x86_64;intel-openvino-ie-samples__x86_64;intel-openvino-ie-rt__x86_64;intel-openvino-ie-bin-3rd-debug__x86_64;intel-openvino-ie-rt-core-ubuntu-xenial__x86_64;intel-openvino-ie-rt-cpu-ubuntu-xenial__x86_64;intel-openvino-ie-rt-gpu-ubuntu-xenial__x86_64;intel-openvino-ie-rt-vpu-ubuntu-xenial__x86_64;intel-openvino-ie-rt-gna-ubuntu-xenial__x86_64;intel-openvino-ie-rt-hddl-ubuntu-xenial__x86_64;intel-openvino-omz-tools__x86_64;intel-openvino-docs__noarch;intel-openvino-gfx-driver-ubuntu-xenial__x86_64;intel-openvino-base-pset' \
+            ;; \
+        *openvino_toolkit_fpga_2019.3*) \
+            COMPONENTS='intel-openvino-base__noarch;intel-openvino-dldt-base__noarch;intel-openvino-fpga-base__noarch;intel-openvino-setupvars__noarch;intel-openvino-fpga-setupvars__x86_64;intel-openvino-eula__noarch;intel-openvino-ie-sdk-ubuntu-xenial__x86_64;intel-openvino-ie-bin-python-tools-ubuntu-xenial__x86_64;intel-openvino-ie-samples__x86_64;intel-openvino-ie-rt__x86_64;intel-openvino-ie-bin-3rd-debug__x86_64;intel-openvino-ie-rt-core-ubuntu-xenial__x86_64;intel-openvino-ie-rt-cpu-ubuntu-xenial__x86_64;intel-openvino-ie-rt-gpu-ubuntu-xenial__x86_64;intel-openvino-ie-rt-vpu-ubuntu-xenial__x86_64;intel-openvino-ie-rt-gna-ubuntu-xenial__x86_64;intel-openvino-ie-rt-dlia-ubuntu-xenial__x86_64;intel-openvino-ie-rt-hddl-ubuntu-xenial__x86_64;intel-openvino-omz-tools__x86_64;intel-openvino-docs__noarch;intel-openvino-gfx-driver-ubuntu-xenial__x86_64;intel-openvino-fpga-rte__x86_64;intel-openvino-fpga-base-pset' \
             ;; \
         *) \
             COMPONENTS=DEFAULTS \
@@ -35,8 +47,9 @@ RUN cd $TEMP_DIR/l_openvino_toolkit* && \
     ./install.sh -s silent.cfg --ignore-signature && \
     rm -Rf $TEMP_DIR $INSTALL_DIR/install_dependencies $INSTALL_DIR/uninstall* /tmp/* $DL_INSTALL_DIR/documentation $DL_INSTALL_DIR/inference_engine/samples
 
+ENV HDDL_INSTALL_DIR="$DL_INSTALL_DIR/inference_engine/external/hddl"
 ENV PYTHONPATH="$INSTALL_DIR/python/python3.5"
-ENV LD_LIBRARY_PATH="$DL_INSTALL_DIR/inference_engine/external/tbb/lib:$DL_INSTALL_DIR/inference_engine/external/mkltiny_lnx/lib:$DL_INSTALL_DIR/inference_engine/lib/intel64"
+ENV LD_LIBRARY_PATH="$DL_INSTALL_DIR/inference_engine/external/tbb/lib:$DL_INSTALL_DIR/inference_engine/external/mkltiny_lnx/lib:$DL_INSTALL_DIR/inference_engine/external/hddl/lib:$DL_INSTALL_DIR/inference_engine/lib/intel64"
 
 WORKDIR /ie-serving-py
 

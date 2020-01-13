@@ -13,12 +13,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
+import sys
 
 import numpy as np
-import sys
+from constants import PREDICTION_SERVICE, MODEL_SERVICE
+from utils.grpc import infer, get_model_metadata, model_metadata_response, \
+    get_model_status
+from utils.rest import infer_rest, get_model_metadata_response_rest, \
+    get_model_status_response_rest
+
 sys.path.append(".")
-from conftest import infer, get_model_metadata, model_metadata_response,\
-    infer_rest, get_model_metadata_response_rest  # noqa
+from ie_serving.models.models_utils import ModelVersionState, _ERROR_MESSAGE, ErrorCode  # noqa
 
 
 class TestModelVersionHandling():
@@ -26,7 +31,7 @@ class TestModelVersionHandling():
     def test_run_inference(self, download_two_model_versions,
                            input_data_downloader_v1_224,
                            start_server_multi_model,
-                           create_channel_for_port_multi_server):
+                           create_grpc_channel):
         """
         <b>Description</b>
         Execute inference request using gRPC interface with version specified
@@ -55,7 +60,7 @@ class TestModelVersionHandling():
         print("Downloaded model files:", download_two_model_versions)
 
         # Connect to grpc service
-        stub = create_channel_for_port_multi_server
+        stub = create_grpc_channel('localhost:9001', PREDICTION_SERVICE)
 
         imgs_v1_224 = np.array(input_data_downloader_v1_224)
         out_name_v1 = 'resnet_v1_50/predictions/Reshape_1'
@@ -80,33 +85,14 @@ class TestModelVersionHandling():
             assert output[out_name_v1].shape == (1, 1000),\
                 'resnet model with latest version has invalid output'
 
-    def test_get_model_metadata(self, download_two_models,
+    def test_get_model_metadata(self, download_two_model_versions,
                                 start_server_multi_model,
-                                create_channel_for_port_multi_server):
-        """
-        <b>Description</b>
-        Execute inference request using gRPC interface hosting multiple models
+                                create_grpc_channel):
 
-        <b>input data</b>
-        - directory with 2 models in IR format
-        - docker image
-
-        <b>fixtures used</b>
-        - model downloader
-        - input data downloader
-        - service launching
-
-        <b>Expected results</b>
-        - response contains proper response about model metadata for both
-        models set in config file:
-        model resnet_v1_50, pnasnet_large
-        - both served models handles appropriate input formats
-
-        """
-        print("Downloaded model files:", download_two_models)
+        print("Downloaded model files:", download_two_model_versions)
 
         # Connect to grpc service
-        stub = create_channel_for_port_multi_server
+        stub = create_grpc_channel('localhost:9001', PREDICTION_SERVICE)
         versions = [None, 1]
 
         expected_outputs_metadata = \
@@ -133,13 +119,39 @@ class TestModelVersionHandling():
             assert expected_input_metadata == input_metadata
             assert expected_output_metadata == output_metadata
 
+    def test_get_model_status(self, download_two_model_versions,
+                              start_server_multi_model,
+                              create_grpc_channel):
+
+        print("Downloaded model files:", download_two_model_versions)
+
+        # Connect to grpc service
+        stub = create_grpc_channel('localhost:9001', MODEL_SERVICE)
+        versions = [None, 1]
+        for x in range(len(versions)):
+            model_name = 'resnet'
+            request = get_model_status(model_name=model_name,
+                                       version=versions[x])
+            response = stub.GetModelStatus(request, 10)
+
+            versions_statuses = response.model_version_status
+            version_status = versions_statuses[0]
+            if x == 0:
+                assert len(versions_statuses) == 2
+            else:
+                assert version_status.version == 1
+            assert version_status.state == ModelVersionState.AVAILABLE
+            assert version_status.status.error_code == ErrorCode.OK
+            assert version_status.status.error_message == _ERROR_MESSAGE[
+                ModelVersionState.AVAILABLE][ErrorCode.OK]
+
     def test_run_inference_rest(self, download_two_model_versions,
                                 input_data_downloader_v1_224,
                                 start_server_multi_model):
         """
         <b>Description</b>
-        Execute inference request using gRPC interface with version specified
-        and without version set on the client.
+        Execute inference request using REST API interface with version
+        specified and without version set on the client.
         When version is not set server should use the latest version model 2
         When version 1 is selected the model from folder 1 should be used
         and model 2 should be ignored
@@ -188,29 +200,10 @@ class TestModelVersionHandling():
             assert output[out_name_v1].shape == (1, 1000), \
                 'resnet model with latest version has invalid output'
 
-    def test_get_model_metadata_rest(self, download_two_models,
+    def test_get_model_metadata_rest(self, download_two_model_versions,
                                      start_server_multi_model):
-        """
-        <b>Description</b>
-        Execute inference request using gRPC interface hosting multiple models
 
-        <b>input data</b>
-        - directory with 2 models in IR format
-        - docker image
-
-        <b>fixtures used</b>
-        - model downloader
-        - input data downloader
-        - service launching
-
-        <b>Expected results</b>
-        - response contains proper response about model metadata for both
-        models set in config file:
-        model resnet_v1_50, pnasnet_large
-        - both served models handles appropriate input formats
-
-        """
-        print("Downloaded model files:", download_two_models)
+        print("Downloaded model files:", download_two_model_versions)
 
         urls = ['http://localhost:5561/v1/models/resnet/metadata',
                 'http://localhost:5561/v1/models/resnet/versions/1/metadata']
@@ -236,3 +229,24 @@ class TestModelVersionHandling():
             assert model_name == response.model_spec.name
             assert expected_input_metadata == input_metadata
             assert expected_output_metadata == output_metadata
+
+    def test_get_model_status_rest(self, download_two_model_versions,
+                                   start_server_multi_model):
+
+        print("Downloaded model files:", download_two_model_versions)
+
+        urls = ['http://localhost:5561/v1/models/resnet',
+                'http://localhost:5561/v1/models/resnet/versions/1']
+
+        for x in range(len(urls)):
+            response = get_model_status_response_rest(urls[x])
+            versions_statuses = response.model_version_status
+            version_status = versions_statuses[0]
+            if x == 0:
+                assert len(versions_statuses) == 2
+            else:
+                assert version_status.version == 1
+            assert version_status.state == ModelVersionState.AVAILABLE
+            assert version_status.status.error_code == ErrorCode.OK
+            assert version_status.status.error_message == _ERROR_MESSAGE[
+                ModelVersionState.AVAILABLE][ErrorCode.OK]

@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
-from ie_serving.config import MAPPING_CONFIG_FILENAME
+from ie_serving.config import GLOBAL_CONFIG
 from ie_serving.logger import get_logger
 from ie_serving.models.ir_engine import IrEngine
 from ie_serving.models.model import Model
@@ -70,13 +70,14 @@ class GSModel(Model):
             model_directory += os.sep
         parsed_model_dir = urlparse(model_directory)
         content_list = cls.gs_list_content(model_directory)
-        pattern = re.compile('(' + parsed_model_dir.path[1:-1] + '/\d+/).*$')
+        pattern = re.compile('(' + parsed_model_dir.path[1:-1] + r'/\d+/).*$')
         versions = set([m.group(1) for m in (pattern.match(element) for
                                              element in content_list) if m])
 
         return [urlunparse((parsed_model_dir.scheme, parsed_model_dir.netloc,
                             version, parsed_model_dir.params,
-                            parsed_model_dir.query, parsed_model_dir.fragment))
+                            parsed_model_dir.query,
+                            parsed_model_dir.fragment))
                 for version in versions]
 
     @classmethod
@@ -107,23 +108,26 @@ class GSModel(Model):
     @classmethod
     def _get_mapping_config(cls, version):
         content_list = cls.gs_list_content(version)
-        mapping_config = urlparse(version).path[1:] + MAPPING_CONFIG_FILENAME
+        mapping_config = urlparse(version).path[1:] + GLOBAL_CONFIG[
+            'mapping_config_filename']
         if mapping_config in content_list:
-            return version + MAPPING_CONFIG_FILENAME
+            return version + GLOBAL_CONFIG['mapping_config_filename']
         else:
             return None
 
     @classmethod
-    def get_engine_for_version(cls, version_attributes):
-        local_xml_file, local_bin_file, local_mapping_config = \
-            cls.create_local_mirror(version_attributes)
+    def get_engine_for_version(cls, model_name, version_attributes):
+        version_attributes['xml_file'], version_attributes['bin_file'], \
+            version_attributes['mapping_config'] = cls.create_local_mirror(
+            version_attributes)
         logger.info('Downloaded files from GCS')
-        engine = IrEngine.build(model_xml=local_xml_file,
-                                model_bin=local_bin_file,
-                                mapping_config=local_mapping_config,
-                                batch_size=version_attributes['batch_size'])
-        cls.delete_local_mirror([local_xml_file, local_bin_file,
-                                 local_mapping_config])
+
+        engine_spec = cls._get_engine_spec(model_name, version_attributes)
+        engine = IrEngine.build(**engine_spec)
+
+        cls.delete_local_mirror([version_attributes['xml_file'],
+                                 version_attributes['bin_file'],
+                                 version_attributes['mapping_config']])
         logger.info('Deleted temporary files')
         return engine
 
